@@ -1,0 +1,9 @@
+﻿################################################################################
+# Данный GITIGNORE-файл был автоматически создан Microsoft(R) Visual Studio.
+################################################################################
+
+/HW1. Low level memory/Parser/.vs
+/HW1. Low level memory/Parser/Parser/bin/Debug/net10.0
+/HW1. Low level memory/Parser/Parser/obj
+/HW1. Low level memory/Parser/Parser.Test/bin/Debug/net10.0
+/HW1. Low level memory/Parser/Parser.Test/obj
