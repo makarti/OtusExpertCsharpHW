@@ -1,4 +1,6 @@
-﻿using Parser;
+﻿using Parser.Parsing;
+using Parser.Servers;
+using Parser.Storage;
 using var cts = new CancellationTokenSource();
 
 Console.CancelKeyPress += (_, e) =>
@@ -8,7 +10,8 @@ Console.CancelKeyPress += (_, e) =>
     cts.Cancel();
 };
 
-using var server = new TcpServer();
+using var store = new SimpleStore();
+using var server = new TcpServer(store);
 Task serverTask = server.StartAsync(cts.Token);
 
 Console.ReadLine();

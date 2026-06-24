@@ -1,4 +1,4 @@
-namespace Parser;
+namespace Parser.Storage;
 
 public sealed class SimpleStore : IDisposable
 {

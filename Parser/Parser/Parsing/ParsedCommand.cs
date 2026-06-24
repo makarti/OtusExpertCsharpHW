@@ -1,4 +1,4 @@
-namespace Parser;
+namespace Parser.Parsing;
 
 public readonly ref struct ParsedCommand
 {

@@ -1,4 +1,4 @@
-namespace Parser;
+namespace Parser.Parsing;
 
 /// <summary>
 /// Разбирает команды вида <c>COMMAND KEY [VALUE]</c> из буфера байт.
@@ -33,7 +33,7 @@ public static class CommandParser
         int keyEnd = keyStart.IndexOf(_space);
 
         if (keyEnd < 0)
-        {            
+        {
             return new ParsedCommand
             {
                 Command = command,
@@ -54,7 +54,7 @@ public static class CommandParser
             Value = valuePart
         };
     }
-    
+
     private static ReadOnlySpan<byte> SkipSpaces(ReadOnlySpan<byte> span)
     {
         int i = 0;
@@ -64,17 +64,20 @@ public static class CommandParser
         return span.Slice(i);
     }
 
-    /// Убирает пробелы c двух сторон.
+    /// Убирает пробелы, \r и \n c двух сторон.
     private static ReadOnlySpan<byte> Trim(ReadOnlySpan<byte> span)
     {
         int start = 0;
-        while (start < span.Length && span[start] == _space)
+        while (start < span.Length && IsWhitespace(span[start]))
             start++;
 
         int end = span.Length - 1;
-        while (end >= start && span[end] == _space)
+        while (end >= start && IsWhitespace(span[end]))
             end--;
 
         return start > end ? ReadOnlySpan<byte>.Empty : span.Slice(start, end + 1);
     }
+
+    private static bool IsWhitespace(byte b) =>
+        b == _space || b == (byte)'\r' || b == (byte)'\n';
 }

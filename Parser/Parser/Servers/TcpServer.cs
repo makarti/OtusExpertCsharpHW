@@ -2,21 +2,25 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Parser.Parsing;
+using Parser.Storage;
 
-namespace Parser
+namespace Parser.Servers
 {
     public class TcpServer : IDisposable
     {
         private Socket? _serverSocket;
         private readonly CancellationTokenSource _cts;
+        private readonly SimpleStore _store;
 
-        private const int _BUFFERSIZE = 4096;
+        private const int _BUFFERSIZE = 1024;
 
         private readonly IPAddress _address;
         private readonly int _port;
 
-        public TcpServer()
+        public TcpServer(SimpleStore store)
         {
+            _store = store;
             _address = IPAddress.Loopback;
             _port = 8080;
             _cts = new ();
@@ -57,7 +61,7 @@ namespace Parser
             Console.WriteLine("TcpServer остановлен");
         }
 
-        private static async Task ProcessClientAsync(Socket clientSocket, CancellationToken cancellationToken)
+        private async Task ProcessClientAsync(Socket clientSocket, CancellationToken cancellationToken)
         {
             var remoteEndpoint = clientSocket.RemoteEndPoint?.ToString();
 
@@ -91,15 +95,62 @@ namespace Parser
                         break;
                     }
 
-                    ReadOnlySpan<byte> received = buffer.AsSpan(0, bytesRead); 
-                    PrintParsedCommand(received, remoteEndpoint);
+                    ReadOnlySpan<byte> received = buffer.AsSpan(0, bytesRead);
+
+                    ParsedCommand cmd = CommandParser.Parse(received);
+                    byte[] response;
+
+                    if (cmd.IsDefault)
+                    {
+                        string raw = Encoding.UTF8.GetString(received);
+                        Console.WriteLine($"{remoteEndpoint} ввел некорректную команду: \"{raw}\"");
+                        response = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+                    }
+                    else
+                    {
+                        string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
+                        string key = Encoding.UTF8.GetString(cmd.Key);
+
+                        Console.WriteLine($"[{remoteEndpoint}] CMD={command} KEY={key}");
+
+                        switch (command)
+                        {
+                            case "SET":
+                                _store.Set(key, cmd.Value.ToArray());
+                                response = Encoding.UTF8.GetBytes("OK\r\n");
+                                break;
+                            case "GET":
+                                byte[]? result = _store.Get(key);
+                                if (result is null)
+                                {
+                                    response = Encoding.UTF8.GetBytes("(nil)\r\n");
+                                }
+                                else
+                                {
+                                    var crlf = Encoding.UTF8.GetBytes("\r\n");
+                                    response = new byte[result.Length + crlf.Length];
+                                    result.CopyTo(response, 0);
+                                    crlf.CopyTo(response);
+                                }
+                                break;
+                            case "DELETE":
+                                _store.Delete(key);
+                                response = Encoding.UTF8.GetBytes("OK\r\n");
+                                break;
+                            default:
+                                response = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+                                break;
+                        }
+                    }
+
+                    await clientSocket.SendAsync(response, SocketFlags.None, cancellationToken);
                 }
             }
             finally
             {
                 try
                 {
-                    clientSocket.Shutdown(SocketShutdown.Both);
+                        clientSocket.Shutdown(SocketShutdown.Both);
                 }
                 catch
                 {
@@ -112,26 +163,6 @@ namespace Parser
 
                 Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
             }
-        }
-
-        private static void PrintParsedCommand(ReadOnlySpan<byte> line, string remoteEndpoint)
-        {
-            ParsedCommand cmd = CommandParser.Parse(line);
-
-            if (cmd.IsDefault)
-            {
-                string raw = Encoding.UTF8.GetString(line);
-                Console.WriteLine($"{remoteEndpoint} ввел некорректную команду: \"{raw}\"");
-                return;
-            }
-
-            string command = Encoding.UTF8.GetString(cmd.Command);
-            string key = Encoding.UTF8.GetString(cmd.Key);
-            string value = cmd.Value.IsEmpty
-                ? string.Empty
-                : Encoding.UTF8.GetString(cmd.Value);
-
-            Console.WriteLine($"[{remoteEndpoint}] CMD={command} KEY={key} VALUE={value}");
         }
 
         public void Dispose()
