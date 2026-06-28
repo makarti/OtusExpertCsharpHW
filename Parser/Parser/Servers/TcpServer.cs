@@ -18,6 +18,10 @@ namespace Parser.Servers
         private readonly IPAddress _address;
         private readonly int _port;
 
+        private const string OK = "OK\r\n";
+        private const string NIL = "(nil)\r\n";
+        private const string ERR = "-ERR Unknown command\r\n";
+
         public TcpServer(SimpleStore store)
         {
             _store = store;
@@ -104,7 +108,7 @@ namespace Parser.Servers
                     {
                         string raw = Encoding.UTF8.GetString(received);
                         Console.WriteLine($"{remoteEndpoint} ввел некорректную команду: \"{raw}\"");
-                        response = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+                        response = Encoding.UTF8.GetBytes(ERR);
                     }
                     else
                     {
@@ -117,28 +121,28 @@ namespace Parser.Servers
                         {
                             case "SET":
                                 _store.Set(key, cmd.Value.ToArray());
-                                response = Encoding.UTF8.GetBytes("OK\r\n");
+                                response = Encoding.UTF8.GetBytes(OK);
                                 break;
                             case "GET":
                                 byte[]? result = _store.Get(key);
                                 if (result is null)
                                 {
-                                    response = Encoding.UTF8.GetBytes("(nil)\r\n");
+                                    response = Encoding.UTF8.GetBytes(NIL);
                                 }
                                 else
                                 {
                                     var crlf = Encoding.UTF8.GetBytes("\r\n");
                                     response = new byte[result.Length + crlf.Length];
                                     result.CopyTo(response, 0);
-                                    crlf.CopyTo(response);
+                                    crlf.CopyTo(response, result.Length);
                                 }
                                 break;
                             case "DELETE":
                                 _store.Delete(key);
-                                response = Encoding.UTF8.GetBytes("OK\r\n");
+                                response = Encoding.UTF8.GetBytes(OK);
                                 break;
                             default:
-                                response = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+                                response = Encoding.UTF8.GetBytes(ERR);
                                 break;
                         }
                     }
