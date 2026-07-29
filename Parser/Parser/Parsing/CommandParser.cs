@@ -64,20 +64,20 @@ public static class CommandParser
         return span.Slice(i);
     }
 
-    /// Убирает пробелы, \r и \n c двух сторон.
+    /// Убирает пробелы c двух сторон.
     private static ReadOnlySpan<byte> Trim(ReadOnlySpan<byte> span)
     {
-        int start = 0;
-        while (start < span.Length && IsWhitespace(span[start]))
-            start++;
+            int start = 0;
+            while (start < span.Length && IsWhitespace(span[start]))
+                start++;
 
-        int end = span.Length - 1;
-        while (end >= start && IsWhitespace(span[end]))
-            end--;
+            int end = span.Length - 1;
+            while (end >= start && IsWhitespace(span[end]))
+                end--;
 
-        return start > end ? ReadOnlySpan<byte>.Empty : span.Slice(start, end + 1);
+            return start > end ? ReadOnlySpan<byte>.Empty : span.Slice(start, end + 1);
     }
 
     private static bool IsWhitespace(byte b) =>
-        b == _space || b == (byte)'\r' || b == (byte)'\n';
+        b == _space;
 }

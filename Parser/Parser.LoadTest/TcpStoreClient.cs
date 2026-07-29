@@ -1,11 +1,15 @@
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
+using Parser.Models;
 
 namespace Parser.LoadTest;
     
 public sealed class TcpStoreClient : IAsyncDisposable
 {
     private readonly Encoding _enc = new UTF8Encoding(false);
+    // семафор: только один запрос (WriteAsync + ReadLineAsync) в полёте.
+    private readonly SemaphoreSlim _gate = new(initialCount: 1, maxCount: 1);
 
     private TcpClient? _tcpClient;
     private NetworkStream? _stream;
@@ -23,23 +27,31 @@ public sealed class TcpStoreClient : IAsyncDisposable
         _writer = new StreamWriter(_stream, _enc, leaveOpen: true) { AutoFlush = true };
     }
 
-    public async Task<string> SetAsync(string key, byte[] value)
+    public async Task<string> SetAsync(string key, UserProfile profile)
     {
-        string valueStr = _enc.GetString(value);
-        await SendAsync($"SET {key} {valueStr}\r\n");
-        return await ReadResponseAsync();
+        string valueStr = JsonSerializer.Serialize(profile);
+        return await SendAndReadAsync($"SET {key} {valueStr}\r\n");
     }
 
     public async Task<string?> GetAsync(string key)
     {
-        await SendAsync($"GET {key}\r\n");
-        return await ReadResponseAsync();
+        return await SendAndReadAsync($"GET {key}\r\n");
     }
 
     public async Task<string> DeleteAsync(string key)
     {
-        await SendAsync($"DELETE {key}\r\n");
-        return await ReadResponseAsync();
+        return await SendAndReadAsync($"DELETE {key}\r\n");
+    }
+
+    private async Task<string> SendAndReadAsync(string message)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            await SendAsync(message);
+            return await ReadResponseAsync();
+        }
+        finally { _gate.Release(); }
     }
 
     private async Task SendAsync(string message)

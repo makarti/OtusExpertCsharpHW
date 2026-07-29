@@ -1,6 +1,7 @@
 ﻿using NBomber.Contracts.Stats;
 using NBomber.CSharp;
 using Parser.LoadTest;
+using Parser.Models;
 
 const string host = "127.0.0.1";
 const int port = 8080;
@@ -11,12 +12,17 @@ await client.ConnectAsync(host, port);
 var setScenario = Scenario.Create("SetScenario", async context =>
 {
 
-    var key   = $"user:data{context.InvocationNumber}";
-    var value = System.Text.Encoding.UTF8.GetBytes($"value{context.InvocationNumber}");
+    var key = $"user:data{context.InvocationNumber}";
+    var profile = new UserProfile
+    {
+        Id = (int)context.InvocationNumber,
+        Username = $"user{context.InvocationNumber}",
+        CreatedAt = DateTime.UtcNow
+    };
 
     try
     {
-        var reply = await client.SetAsync(key, value);
+        var reply = await client.SetAsync(key, profile);
         return reply == "OK"
             ? Response.Ok(statusCode: "OK")
             : Response.Fail(statusCode: reply);

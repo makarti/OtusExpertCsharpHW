@@ -1,11 +1,10 @@
-using System.Text;
+using Parser.Models;
 using Parser.Storage;
 
 namespace Parser.Test
 {
     public class SimpleStoreTests
     {
-        private static byte[] ToBytes(string s) => Encoding.UTF8.GetBytes(s);
 
         [Fact]
         public async Task ConcurrentOperations_Statistics()
@@ -18,7 +17,12 @@ namespace Parser.Test
             var setTasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>
             {
                 for (int i = 0; i < actionCount; i++)
-                    store.Set($"data:{i}", ToBytes("value"));
+                    store.Set($"data:{i}", new UserProfile
+                    {
+                        Id = i,
+                        Username = $"user{i}",
+                        CreatedAt = DateTime.UtcNow
+                    });
             }));
 
             var getTasks = Enumerable.Range(0, threadCount).Select(_ => Task.Run(() =>

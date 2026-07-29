@@ -2,6 +2,8 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
+using Parser.Models;
 using Parser.Parsing;
 using Parser.Storage;
 
@@ -18,9 +20,11 @@ namespace Parser.Servers
         private readonly IPAddress _address;
         private readonly int _port;
 
-        private const string OK = "OK\r\n";
-        private const string NIL = "(nil)\r\n";
-        private const string ERR = "-ERR Unknown command\r\n";
+
+        private readonly byte[] crlf = Encoding.UTF8.GetBytes("\r\n");
+        private readonly byte[] OK = Encoding.UTF8.GetBytes("OK\r\n");
+        private readonly byte[] NIL = Encoding.UTF8.GetBytes("(nil)\r\n");
+        private readonly byte[] ERR = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
 
         public TcpServer(SimpleStore store)
         {
@@ -99,62 +103,19 @@ namespace Parser.Servers
                         break;
                     }
 
-                    ReadOnlySpan<byte> received = buffer.AsSpan(0, bytesRead);
+                    var responses = ProcessBuffer(buffer, bytesRead);
 
-                    ParsedCommand cmd = CommandParser.Parse(received);
-                    byte[] response;
-
-                    if (cmd.IsDefault)
+                    for(int i = 0; i < responses.Count; i++)
                     {
-                        string raw = Encoding.UTF8.GetString(received);
-                        Console.WriteLine($"{remoteEndpoint} ввел некорректную команду: \"{raw}\"");
-                        response = Encoding.UTF8.GetBytes(ERR);
+                        await clientSocket.SendAsync(responses[i], SocketFlags.None, cancellationToken);
                     }
-                    else
-                    {
-                        string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
-                        string key = Encoding.UTF8.GetString(cmd.Key);
-
-                        Console.WriteLine($"[{remoteEndpoint}] CMD={command} KEY={key}");
-
-                        switch (command)
-                        {
-                            case "SET":
-                                _store.Set(key, cmd.Value.ToArray());
-                                response = Encoding.UTF8.GetBytes(OK);
-                                break;
-                            case "GET":
-                                byte[]? result = _store.Get(key);
-                                if (result is null)
-                                {
-                                    response = Encoding.UTF8.GetBytes(NIL);
-                                }
-                                else
-                                {
-                                    var crlf = Encoding.UTF8.GetBytes("\r\n");
-                                    response = new byte[result.Length + crlf.Length];
-                                    result.CopyTo(response, 0);
-                                    crlf.CopyTo(response, result.Length);
-                                }
-                                break;
-                            case "DELETE":
-                                _store.Delete(key);
-                                response = Encoding.UTF8.GetBytes(OK);
-                                break;
-                            default:
-                                response = Encoding.UTF8.GetBytes(ERR);
-                                break;
-                        }
-                    }
-
-                    await clientSocket.SendAsync(response, SocketFlags.None, cancellationToken);
                 }
             }
             finally
             {
                 try
                 {
-                        clientSocket.Shutdown(SocketShutdown.Both);
+                    clientSocket.Shutdown(SocketShutdown.Both);
                 }
                 catch
                 {
@@ -167,6 +128,99 @@ namespace Parser.Servers
 
                 Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
             }
+        }
+
+        private List<byte[]> ProcessBuffer(byte[] buffer, int bytesRead)
+        {
+
+            ReadOnlySpan<byte> received = buffer.AsSpan(0, bytesRead);
+            var responses = new List<byte[]>();
+            var processed = 0;
+
+            while (processed < received.Length)
+            {
+                var remaining = received.Slice(processed);
+                var newlineIndex = remaining.IndexOf(crlf);
+
+                if (newlineIndex == -1)
+                    break;
+
+                var commandRow = remaining.Slice(0, newlineIndex);
+                processed += newlineIndex + 2;
+
+                responses.Add(ProcessLine(commandRow));
+            }
+
+            return responses;
+        }
+
+        private byte[] ProcessLine(ReadOnlySpan<byte> received)
+        {
+            ParsedCommand cmd = CommandParser.Parse(received);
+            byte[] response;
+
+
+            if (cmd.IsDefault)
+            {
+                response = ERR;
+            }
+            else
+            {
+                string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
+                string key = Encoding.UTF8.GetString(cmd.Key);
+
+                switch (command)
+                {
+                    case "SET":
+                    {
+                        try
+                        {
+                            var profile = JsonSerializer.Deserialize<UserProfile>(cmd.Value);
+                            if (profile != null)
+                            {
+                                _store.Set(key, profile);
+                                response = OK;
+                            }
+                            else
+                            {
+                                response = ERR;
+                            }
+                        }
+                        catch
+                        {
+                            response = ERR;
+                        }
+
+                        break;
+                    }
+                    case "GET":
+                        {
+                            var profile = _store.Get(key);
+                            if (profile != null)
+                            {
+                                byte[] result = JsonSerializer.SerializeToUtf8Bytes(profile);
+                                response = new byte[result.Length + crlf.Length];
+                                result.CopyTo(response, 0);
+                                crlf.CopyTo(response, result.Length);
+
+                            }
+                            else
+                            {
+                                response = NIL;
+                            }
+
+                            break;
+                        }
+                    case "DELETE":
+                        _store.Delete(key);
+                        response = OK;
+                        break;
+                    default:
+                        response = ERR;
+                        break;
+                }
+            }
+            return response;
         }
 
         public void Dispose()

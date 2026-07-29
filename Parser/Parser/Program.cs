@@ -23,6 +23,7 @@ try
 {
     await serverTask;
 }
-catch (OperationCanceledException)
+catch (OperationCanceledException ex)
 {
+    Console.WriteLine(ex);
 }

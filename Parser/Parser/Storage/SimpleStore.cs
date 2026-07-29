@@ -1,3 +1,6 @@
+using System.Text.Json;
+using Parser.Models;
+
 namespace Parser.Storage;
 
 public sealed class SimpleStore : IDisposable
@@ -9,15 +12,17 @@ public sealed class SimpleStore : IDisposable
     private long _getCount;
     private long _deleteCount;
 
-    public void Set(string key, byte[] value)
+    public void Set(string key, UserProfile profile)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
-        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(profile);
 
         _lock.EnterWriteLock();
         try
         {
-            _store[key] = value;
+            _store[key] = bytes;
         }
         finally
         {
@@ -27,7 +32,7 @@ public sealed class SimpleStore : IDisposable
         Interlocked.Increment(ref _setCount);
     }
 
-    public byte[]? Get(string key)
+    public UserProfile? Get(string key)
     {
         ArgumentException.ThrowIfNullOrEmpty(key);
 
@@ -43,7 +48,8 @@ public sealed class SimpleStore : IDisposable
         }
 
         Interlocked.Increment(ref _getCount);
-        return result;
+
+        return result is null ? null : JsonSerializer.Deserialize<UserProfile>(result);
     }
 
     public void Delete(string key)
