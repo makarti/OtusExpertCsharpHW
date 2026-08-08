@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -7,227 +8,225 @@ using Parser.Models;
 using Parser.Parsing;
 using Parser.Storage;
 
-namespace Parser.Servers
+namespace Parser.Servers;
+
+public sealed class TcpServer : IDisposable
 {
-    public class TcpServer : IDisposable
+    private Socket? _serverSocket;
+    private readonly CancellationTokenSource _cts;
+    private readonly SimpleStore _store;
+
+    private const int RecvBufferSize = 4096;
+
+    private readonly IPAddress _address;
+    private readonly int _port;
+
+    private static readonly byte[] ResponseOk = Encoding.UTF8.GetBytes("OK\r\n");
+    private static readonly byte[] ResponseNil = Encoding.UTF8.GetBytes("(nil)\r\n");
+    private static readonly byte[] ResponseErr = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
+    private static readonly byte[] ResponseErrJson = Encoding.UTF8.GetBytes("-ERR Invalid JSON\r\n");
+    private static readonly byte[] CrLf = Encoding.UTF8.GetBytes("\r\n");
+
+    public TcpServer(SimpleStore store)
     {
-        private Socket? _serverSocket;
-        private readonly CancellationTokenSource _cts;
-        private readonly SimpleStore _store;
+        _store = store;
+        _address = IPAddress.Loopback;
+        _port = 8080;
+        _cts = new CancellationTokenSource();
+    }
 
-        private const int _BUFFERSIZE = 1024;
+    public async Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        _serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        _serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-        private readonly IPAddress _address;
-        private readonly int _port;
+        var endpoint = new IPEndPoint(_address, _port);
+        _serverSocket.Bind(endpoint);
+        _serverSocket.Listen();
 
+        Console.WriteLine("TcpServer запущен");
 
-        private readonly byte[] crlf = Encoding.UTF8.GetBytes("\r\n");
-        private readonly byte[] OK = Encoding.UTF8.GetBytes("OK\r\n");
-        private readonly byte[] NIL = Encoding.UTF8.GetBytes("(nil)\r\n");
-        private readonly byte[] ERR = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
-
-        public TcpServer(SimpleStore store)
+        while (!cancellationToken.IsCancellationRequested)
         {
-            _store = store;
-            _address = IPAddress.Loopback;
-            _port = 8080;
-            _cts = new ();
+            Socket clientSocket;
+            try
+            {
+                clientSocket = await _serverSocket.AcceptAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (SocketException ex)
+            {
+                Console.Error.WriteLine($"Ошибка: {ex.Message}");
+                continue;
+            }
+
+            Console.WriteLine($"Клиент подключен: {clientSocket.RemoteEndPoint}");
+            _ = ProcessClientAsync(clientSocket, cancellationToken);
         }
 
-        public async Task StartAsync(CancellationToken cancellationToken = default)
+        Console.WriteLine("TcpServer остановлен");
+    }
+
+    private async Task ProcessClientAsync(Socket clientSocket, CancellationToken cancellationToken)
+    {
+        var remoteEndpoint = clientSocket.RemoteEndPoint?.ToString();
+
+        var stream = new NetworkStream(clientSocket, ownsSocket: false);
+        var reader = PipeReader.Create(stream, new StreamPipeReaderOptions(bufferSize: RecvBufferSize));
+
+        try
         {
-            _serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-
-            var endpoint = new IPEndPoint(_address, _port);
-            _serverSocket.Bind(endpoint);
-            _serverSocket.Listen();
-
-            Console.WriteLine($"TcpServer запущен");
-
             while (!cancellationToken.IsCancellationRequested)
             {
-                Socket clientSocket;
+                ReadResult result;
                 try
                 {
-                    clientSocket = await _serverSocket.AcceptAsync(cancellationToken);
+                    result = await reader.ReadAsync(cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
                     break;
                 }
-                catch (SocketException ex)
+
+                ReadOnlySequence<byte> buffer = result.Buffer;
+
+                // Извлекаем все полные строки (до \r\n), которые уже накопились
+                while (TryReadLine(ref buffer, out ReadOnlySequence<byte> line))
                 {
-                    Console.Error.WriteLine($"Ошибка: {ex.Message}");
-                    continue;
+                    byte[] response = ProcessLine(line);
+                    await stream.WriteAsync(response, cancellationToken);
                 }
 
-                Console.WriteLine($"Клиент подключен: {clientSocket.RemoteEndPoint}");
+                // Говорим PipeReader: "buffer.Start..buffer.End ещё не обработаны,
+                // но то что было до buffer.Start — можно освободить".
+                reader.AdvanceTo(buffer.Start, buffer.End);
 
-                _ = ProcessClientAsync(clientSocket, cancellationToken);
+                // Клиент закрыл соединение
+                if (result.IsCompleted)
+                {
+                    Console.WriteLine($"{remoteEndpoint} отсоединен.");
+                    break;
+                }
             }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+        }
+        finally
+        {
+            await reader.CompleteAsync();
+            await stream.DisposeAsync();
 
-            Console.WriteLine("TcpServer остановлен");
+            try { clientSocket.Shutdown(SocketShutdown.Both); } catch { }
+            clientSocket.Close();
+            clientSocket.Dispose();
+
+            Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
+        }
+    }
+
+    /// <summary>
+    /// Ищет разделитель \r\n в последовательности и, если найден,
+    /// возвращает строку перед ним и сдвигает <paramref name="buffer"/> за него.
+    /// </summary>
+    private static bool TryReadLine(ref ReadOnlySequence<byte> buffer, out ReadOnlySequence<byte> line)
+    {
+        var seqReader = new SequenceReader<byte>(buffer);
+
+        // TryReadTo ищет "\r\n" даже если он "размазан" по границе двух сегментов Pipe
+        if (!seqReader.TryReadTo(out line, CrLf, advancePastDelimiter: true))
+        {
+            line = default;
+            return false;
         }
 
-        private async Task ProcessClientAsync(Socket clientSocket, CancellationToken cancellationToken)
+        buffer = buffer.Slice(seqReader.Position);
+        return true;
+    }
+
+
+    private byte[] ProcessLine(ReadOnlySequence<byte> lineSeq)
+    {
+        // строка целиком лежит в одном сегменте Pipe
+        if (lineSeq.IsSingleSegment)
+            return ProcessLineCore(lineSeq.FirstSpan);
+
+        // команда пришла на стыке двух чтений сокета и оказалась
+        // растянута по двум сегментам. Копируем в один буфер из пула.
+        byte[] rented = ArrayPool<byte>.Shared.Rent((int)lineSeq.Length);
+        try
         {
-            var remoteEndpoint = clientSocket.RemoteEndPoint?.ToString();
+            lineSeq.CopyTo(rented);
+            return ProcessLineCore(rented.AsSpan(0, (int)lineSeq.Length));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
 
-            byte[] buffer = ArrayPool<byte>.Shared.Rent(_BUFFERSIZE);
+    private byte[] ProcessLineCore(ReadOnlySpan<byte> received)
+    {
+        ParsedCommand cmd = CommandParser.Parse(received);
 
-            try
-            {
-                var memory = new Memory<byte>(buffer, 0, _BUFFERSIZE);
+        if (cmd.IsDefault)
+            return ResponseErr;
 
-                while (!cancellationToken.IsCancellationRequested)
+        string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
+        string key = Encoding.UTF8.GetString(cmd.Key);
+
+        switch (command)
+        {
+            case "SET":
                 {
-                    int bytesRead;
+                    if (cmd.Value.IsEmpty)
+                        return ResponseErr;
+
                     try
                     {
-                        bytesRead = await clientSocket.ReceiveAsync(memory, SocketFlags.None, cancellationToken);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch (SocketException ex)
-                    {
-                        Console.Error.WriteLine($"Ошибка получения данных от клиента: {ex.Message}");
-                        break;
-                    }
+                        var profile = JsonSerializer.Deserialize<UserProfile>(cmd.Value);
+                        if (profile is null)
+                            return ResponseErrJson;
 
-                    //Клиент закрыл соединение
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"{remoteEndpoint} отсоединен.");
-                        break;
+                        _store.Set(key, profile);
+                        return ResponseOk;
                     }
-
-                    var responses = ProcessBuffer(buffer, bytesRead);
-
-                    for(int i = 0; i < responses.Count; i++)
+                    catch (JsonException)
                     {
-                        await clientSocket.SendAsync(responses[i], SocketFlags.None, cancellationToken);
+                        return ResponseErrJson;
                     }
                 }
-            }
-            finally
-            {
-                try
+
+            case "GET":
                 {
-                    clientSocket.Shutdown(SocketShutdown.Both);
+                    var profile = _store.Get(key);
+                    if (profile is null)
+                        return ResponseNil;
+
+                    byte[] json = JsonSerializer.SerializeToUtf8Bytes(profile);
+                    byte[] response = new byte[json.Length + CrLf.Length];
+                    json.CopyTo(response, 0);
+                    CrLf.CopyTo(response, json.Length);
+                    return response;
                 }
-                catch
-                {
-                }
 
-                clientSocket.Close();
-                clientSocket.Dispose();
+            case "DELETE":
+                _store.Delete(key);
+                return ResponseOk;
 
-                ArrayPool<byte>.Shared.Return(buffer);
-
-                Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
-            }
+            default:
+                return ResponseErr;
         }
+    }
 
-        private List<byte[]> ProcessBuffer(byte[] buffer, int bytesRead)
-        {
-
-            ReadOnlySpan<byte> received = buffer.AsSpan(0, bytesRead);
-            var responses = new List<byte[]>();
-            var processed = 0;
-
-            while (processed < received.Length)
-            {
-                var remaining = received.Slice(processed);
-                var newlineIndex = remaining.IndexOf(crlf);
-
-                if (newlineIndex == -1)
-                    break;
-
-                var commandRow = remaining.Slice(0, newlineIndex);
-                processed += newlineIndex + 2;
-
-                responses.Add(ProcessLine(commandRow));
-            }
-
-            return responses;
-        }
-
-        private byte[] ProcessLine(ReadOnlySpan<byte> received)
-        {
-            ParsedCommand cmd = CommandParser.Parse(received);
-            byte[] response;
-
-
-            if (cmd.IsDefault)
-            {
-                response = ERR;
-            }
-            else
-            {
-                string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
-                string key = Encoding.UTF8.GetString(cmd.Key);
-
-                switch (command)
-                {
-                    case "SET":
-                    {
-                        try
-                        {
-                            var profile = JsonSerializer.Deserialize<UserProfile>(cmd.Value);
-                            if (profile != null)
-                            {
-                                _store.Set(key, profile);
-                                response = OK;
-                            }
-                            else
-                            {
-                                response = ERR;
-                            }
-                        }
-                        catch
-                        {
-                            response = ERR;
-                        }
-
-                        break;
-                    }
-                    case "GET":
-                        {
-                            var profile = _store.Get(key);
-                            if (profile != null)
-                            {
-                                byte[] result = JsonSerializer.SerializeToUtf8Bytes(profile);
-                                response = new byte[result.Length + crlf.Length];
-                                result.CopyTo(response, 0);
-                                crlf.CopyTo(response, result.Length);
-
-                            }
-                            else
-                            {
-                                response = NIL;
-                            }
-
-                            break;
-                        }
-                    case "DELETE":
-                        _store.Delete(key);
-                        response = OK;
-                        break;
-                    default:
-                        response = ERR;
-                        break;
-                }
-            }
-            return response;
-        }
-
-        public void Dispose()
-        {
-            _cts.Cancel();
-            _cts.Dispose();
-            _serverSocket?.Dispose();
-        }
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
+        _serverSocket?.Dispose();
     }
 }
