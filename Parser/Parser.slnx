@@ -1,5 +1,11 @@
 <Solution>
+  <Project Path="Parser.Benchmarks/Parser.Benchmarks.csproj">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
   <Project Path="Parser.LoadTest/Parser.LoadTest.csproj" />
+  <Project Path="Parser.SourceGenerators/Parser.SourceGenerators.csproj">
+    <Build Solution="Debug|*" Project="false" />
+  </Project>
   <Project Path="Parser.Test/Parser.Test.csproj" />
   <Project Path="Parser/Parser.csproj" />
 </Solution>

@@ -1,6 +1,9 @@
+using Parser.SourceGenerators;
+
 namespace Parser.Models;
 
-public class UserProfile
+[GenerateBinarySerializer]
+public partial class UserProfile
 {
     public int Id { get; set; }
 

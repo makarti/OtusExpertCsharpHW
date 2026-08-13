@@ -20,4 +20,13 @@
 /Parser/Parser.LoadTest/bin/Debug/net10.0
 /Parser/Parser.LoadTest/obj
 /Parser/Parser.slnLaunch.user
-/.vs/CopilotSnapshots/D2A49764B3404148A7A48970B94F80E4
+/.vs
+/Parser/BenchmarkDotNet.Artifacts
+/Parser/Parser/bin/Release/net10.0
+/Parser/Parser.Benchmarks/bin/Release/net10.0
+/Parser/Parser.Benchmarks/obj
+/Parser/Parser.SourceGenerators/bin
+/Parser/Parser.SourceGenerators/obj
+/Parser/Parser.Benchmarks/bin/Debug/net10.0
+/Parser/Parser.LoadTest/bin/Release/net10.0
+/Parser/Parser.Test/bin/Release/net10.0

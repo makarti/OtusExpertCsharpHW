@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Parser.Models;
 
 namespace Parser.Storage;
@@ -17,7 +16,9 @@ public sealed class SimpleStore : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(profile);
 
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(profile);
+        using var memoryStream = new MemoryStream();
+        profile.SerializeToBinary(memoryStream);
+        var bytes = memoryStream.ToArray();
 
         _lock.EnterWriteLock();
         try
@@ -49,7 +50,13 @@ public sealed class SimpleStore : IDisposable
 
         Interlocked.Increment(ref _getCount);
 
-        return result is null ? null : JsonSerializer.Deserialize<UserProfile>(result);
+        if (result is null)
+        {
+            return null;
+        }
+
+        using var memoryStream = new MemoryStream(result);
+        return UserProfile.DeserializeFromBinary(memoryStream);
     }
 
     public void Delete(string key)
