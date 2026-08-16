@@ -1,9 +1,11 @@
 ﻿using System.Buffers;
+using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using Parser.Diagnostics;
 using Parser.Models;
 using Parser.Parsing;
 using Parser.Storage;
@@ -15,8 +17,15 @@ public sealed class TcpServer : IDisposable
     private Socket? _serverSocket;
     private readonly CancellationTokenSource _cts;
     private readonly SimpleStore _store;
+    private readonly SemaphoreSlim _connectionSemaphore;
 
     private const int RecvBufferSize = 4096;
+
+    // Максимальный размер одной команды (защита от истощения памяти).
+    private const int MaxMessageSize = 4096;
+
+    // Максимальное число одновременно обслуживаемых подключений.
+    private const int MaxConcurrentConnections = 100;
 
     private readonly IPAddress _address;
     private readonly int _port;
@@ -25,6 +34,7 @@ public sealed class TcpServer : IDisposable
     private static readonly byte[] ResponseNil = Encoding.UTF8.GetBytes("(nil)\r\n");
     private static readonly byte[] ResponseErr = Encoding.UTF8.GetBytes("-ERR Unknown command\r\n");
     private static readonly byte[] ResponseErrJson = Encoding.UTF8.GetBytes("-ERR Invalid JSON\r\n");
+    private static readonly byte[] ResponseErrTooLarge = Encoding.UTF8.GetBytes("-ERR Message too large\r\n");
     private static readonly byte[] CrLf = Encoding.UTF8.GetBytes("\r\n");
 
     public TcpServer(SimpleStore store)
@@ -33,6 +43,7 @@ public sealed class TcpServer : IDisposable
         _address = IPAddress.Loopback;
         _port = 8080;
         _cts = new CancellationTokenSource();
+        _connectionSemaphore = new SemaphoreSlim(MaxConcurrentConnections, MaxConcurrentConnections);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -64,6 +75,17 @@ public sealed class TcpServer : IDisposable
             }
 
             Console.WriteLine($"Клиент подключен: {clientSocket.RemoteEndPoint}");
+
+            try
+            {
+                await _connectionSemaphore.WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                clientSocket.Dispose();
+                break;
+            }
+
             _ = ProcessClientAsync(clientSocket, cancellationToken);
         }
 
@@ -100,6 +122,15 @@ public sealed class TcpServer : IDisposable
                     await stream.WriteAsync(response, cancellationToken);
                 }
 
+                // Защита от истощения памяти: если незавершённая команда уже превысила лимит,
+                // разрываем соединение, не пытаясь обработать сообщение.
+                if (!result.IsCompleted && buffer.Length > MaxMessageSize)
+                {
+                    Console.WriteLine($"{remoteEndpoint} превысил максимальный размер сообщения ({buffer.Length} байт). Соединение будет разорвано.");
+                    await stream.WriteAsync(ResponseErrTooLarge, cancellationToken);
+                    break;
+                }
+
                 // Говорим PipeReader: "buffer.Start..buffer.End ещё не обработаны,
                 // но то что было до buffer.Start — можно освободить".
                 reader.AdvanceTo(buffer.Start, buffer.End);
@@ -124,6 +155,8 @@ public sealed class TcpServer : IDisposable
             try { clientSocket.Shutdown(SocketShutdown.Both); } catch { }
             clientSocket.Close();
             clientSocket.Dispose();
+
+            _connectionSemaphore.Release();
 
             Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
         }
@@ -179,47 +212,61 @@ public sealed class TcpServer : IDisposable
         string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
         string key = Encoding.UTF8.GetString(cmd.Key);
 
-        switch (command)
+        using var activity = Telemetry.ActivitySource.StartActivity("ProcessCommand");
+        activity?.SetTag("command.name", command);
+        activity?.SetTag("command.key", key);
+
+        var stopwatch = Stopwatch.StartNew();
+        try
         {
-            case "SET":
-                {
-                    if (cmd.Value.IsEmpty)
-                        return ResponseErr;
-
-                    try
+            switch (command)
+            {
+                case "SET":
                     {
-                        var profile = JsonSerializer.Deserialize<UserProfile>(cmd.Value);
-                        if (profile is null)
+                        if (cmd.Value.IsEmpty)
+                            return ResponseErr;
+
+                        try
+                        {
+                            var profile = JsonSerializer.Deserialize<UserProfile>(cmd.Value);
+                            if (profile is null)
+                                return ResponseErrJson;
+
+                            _store.Set(key, profile);
+                            return ResponseOk;
+                        }
+                        catch (JsonException)
+                        {
                             return ResponseErrJson;
-
-                        _store.Set(key, profile);
-                        return ResponseOk;
+                        }
                     }
-                    catch (JsonException)
+
+                case "GET":
                     {
-                        return ResponseErrJson;
+                        var profile = _store.Get(key);
+                        if (profile is null)
+                            return ResponseNil;
+
+                        byte[] json = JsonSerializer.SerializeToUtf8Bytes(profile);
+                        byte[] response = new byte[json.Length + CrLf.Length];
+                        json.CopyTo(response, 0);
+                        CrLf.CopyTo(response, json.Length);
+                        return response;
                     }
-                }
 
-            case "GET":
-                {
-                    var profile = _store.Get(key);
-                    if (profile is null)
-                        return ResponseNil;
+                case "DELETE":
+                    _store.Delete(key);
+                    return ResponseOk;
 
-                    byte[] json = JsonSerializer.SerializeToUtf8Bytes(profile);
-                    byte[] response = new byte[json.Length + CrLf.Length];
-                    json.CopyTo(response, 0);
-                    CrLf.CopyTo(response, json.Length);
-                    return response;
-                }
-
-            case "DELETE":
-                _store.Delete(key);
-                return ResponseOk;
-
-            default:
-                return ResponseErr;
+                default:
+                    return ResponseErr;
+            }
+        }
+        finally
+        {
+            stopwatch.Stop();
+            Telemetry.CommandsProcessedCounter.Add(1, new KeyValuePair<string, object?>("command.name", command));
+            Telemetry.CommandDurationHistogram.Record(stopwatch.Elapsed.TotalMilliseconds, new KeyValuePair<string, object?>("command.name", command));
         }
     }
 
