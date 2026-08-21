@@ -247,12 +247,15 @@ public sealed class TcpServer : IDisposable
                         if (profile is null)
                             return ResponseNil;
 
-                        byte[] json = JsonSerializer.SerializeToUtf8Bytes(profile);
-                        byte[] response = new byte[json.Length + CrLf.Length];
-                        json.CopyTo(response, 0);
-                        CrLf.CopyTo(response, json.Length);
-                        return response;
-                    }
+                    using var memoryStream = new MemoryStream();
+                    profile.SerializeToBinary(memoryStream);
+                    byte[] json = memoryStream.ToArray();
+
+                    byte[] response = new byte[json.Length + CrLf.Length];
+                    json.CopyTo(response, 0);
+                    CrLf.CopyTo(response, json.Length);
+                    return response;
+                }
 
                 case "DELETE":
                     _store.Delete(key);
