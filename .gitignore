@@ -30,3 +30,8 @@
 /Parser/Parser.Benchmarks/bin/Debug/net10.0
 /Parser/Parser.LoadTest/bin/Release/net10.0
 /Parser/Parser.Test/bin/Release/net10.0
+/Parser/bin/Debug
+/Parser/obj
+/Parser/Parser.TcpClient/bin/Debug/net10.0
+/Parser/Parser.TcpClient/obj
+/Parser/Parser.TcpClient/bin/Release/net10.0

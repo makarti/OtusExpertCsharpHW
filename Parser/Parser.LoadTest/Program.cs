@@ -1,9 +1,9 @@
 ﻿using NBomber.Contracts.Stats;
 using NBomber.CSharp;
-using Parser.LoadTest;
 using Parser.Models;
+using Parser.TcpClient;
 
-const string host = "127.0.0.1";
+const string host = "localhost";
 const int port = 8080;
 
 await using var client = new TcpStoreClient();
@@ -27,8 +27,9 @@ var setScenario = Scenario.Create("SetScenario", async context =>
             ? Response.Ok(statusCode: "OK")
             : Response.Fail(statusCode: reply);
     }
-    catch
+    catch (Exception ex)
     {
+        Console.WriteLine(ex);
         return Response.Fail(statusCode: "Ошибка отправки");
     }
 })

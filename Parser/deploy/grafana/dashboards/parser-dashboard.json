@@ -1,0 +1,41 @@
+{
+  "title": "Parser TcpServer",
+  "uid": "parser-tcpserver",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Commands processed / sec",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(parser_commands_processed_total[5m])",
+          "legendFormat": "{{command_name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Command duration (ms) p95",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(parser_command_duration_milliseconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "logs",
+      "title": "Parser logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "expr": "{service_name=\"Parser.TcpServer\"}"
+        }
+      ]
+    }
+  ]
+}

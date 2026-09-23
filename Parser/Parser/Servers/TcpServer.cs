@@ -5,6 +5,8 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Parser.Diagnostics;
 using Parser.Models;
 using Parser.Parsing;
@@ -18,6 +20,7 @@ public sealed class TcpServer : IDisposable
     private readonly CancellationTokenSource _cts;
     private readonly SimpleStore _store;
     private readonly SemaphoreSlim _connectionSemaphore;
+    private readonly ILogger<TcpServer> _logger;
 
     private const int RecvBufferSize = 4096;
 
@@ -37,13 +40,14 @@ public sealed class TcpServer : IDisposable
     private static readonly byte[] ResponseErrTooLarge = Encoding.UTF8.GetBytes("-ERR Message too large\r\n");
     private static readonly byte[] CrLf = Encoding.UTF8.GetBytes("\r\n");
 
-    public TcpServer(SimpleStore store)
+    public TcpServer(SimpleStore store, IPAddress? address = null, int port = 8080, ILogger<TcpServer>? logger = null)
     {
         _store = store;
-        _address = IPAddress.Loopback;
-        _port = 8080;
+        _address = address ?? IPAddress.Loopback;
+        _port = port;
         _cts = new CancellationTokenSource();
         _connectionSemaphore = new SemaphoreSlim(MaxConcurrentConnections, MaxConcurrentConnections);
+        _logger = logger ?? NullLogger<TcpServer>.Instance;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -55,7 +59,7 @@ public sealed class TcpServer : IDisposable
         _serverSocket.Bind(endpoint);
         _serverSocket.Listen();
 
-        Console.WriteLine("TcpServer запущен");
+        _logger.LogInformation("TcpServer запущен на {Address}:{Port}", _address, _port);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -70,11 +74,11 @@ public sealed class TcpServer : IDisposable
             }
             catch (SocketException ex)
             {
-                Console.Error.WriteLine($"Ошибка: {ex.Message}");
+                _logger.LogError(ex, "Ошибка при принятии подключения");
                 continue;
             }
 
-            Console.WriteLine($"Клиент подключен: {clientSocket.RemoteEndPoint}");
+            _logger.LogInformation("Клиент подключен: {RemoteEndPoint}", clientSocket.RemoteEndPoint);
 
             try
             {
@@ -89,7 +93,7 @@ public sealed class TcpServer : IDisposable
             _ = ProcessClientAsync(clientSocket, cancellationToken);
         }
 
-        Console.WriteLine("TcpServer остановлен");
+        _logger.LogInformation("TcpServer остановлен");
     }
 
     private async Task ProcessClientAsync(Socket clientSocket, CancellationToken cancellationToken)
@@ -126,7 +130,7 @@ public sealed class TcpServer : IDisposable
                 // разрываем соединение, не пытаясь обработать сообщение.
                 if (!result.IsCompleted && buffer.Length > MaxMessageSize)
                 {
-                    Console.WriteLine($"{remoteEndpoint} превысил максимальный размер сообщения ({buffer.Length} байт). Соединение будет разорвано.");
+                    _logger.LogWarning("{RemoteEndpoint} превысил максимальный размер сообщения ({BufferLength} байт). Соединение будет разорвано.", remoteEndpoint, buffer.Length);
                     await stream.WriteAsync(ResponseErrTooLarge, cancellationToken);
                     break;
                 }
@@ -138,14 +142,14 @@ public sealed class TcpServer : IDisposable
                 // Клиент закрыл соединение
                 if (result.IsCompleted)
                 {
-                    Console.WriteLine($"{remoteEndpoint} отсоединен.");
+                    _logger.LogInformation("{RemoteEndpoint} отсоединен.", remoteEndpoint);
                     break;
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine(ex);
+            _logger.LogError(ex, "Ошибка при обработке клиента {RemoteEndpoint}", remoteEndpoint);
         }
         finally
         {
@@ -158,7 +162,7 @@ public sealed class TcpServer : IDisposable
 
             _connectionSemaphore.Release();
 
-            Console.WriteLine($"{remoteEndpoint} соединение закрыто.");
+            _logger.LogInformation("{RemoteEndpoint} соединение закрыто.", remoteEndpoint);
         }
     }
 
@@ -212,7 +216,9 @@ public sealed class TcpServer : IDisposable
         string command = Encoding.UTF8.GetString(cmd.Command).ToUpperInvariant();
         string key = Encoding.UTF8.GetString(cmd.Key);
 
+        // Сервер ведёт собственный независимый trace: контекст клиента по TCP не передаётся.
         using var activity = Telemetry.ActivitySource.StartActivity("ProcessCommand");
+
         activity?.SetTag("command.name", command);
         activity?.SetTag("command.key", key);
 

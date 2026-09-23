@@ -1,4 +1,15 @@
 <Solution>
+  <Folder Name="/Solution items/">
+    <File Path="Directory.Build.props" />
+    <File Path="grafana-datasources.yaml" />
+    <File Path="loki-config.yaml" />
+    <File Path="otel-collector-config.yaml" />
+    <File Path="prometheus.yml" />
+    <File Path="tempo.yaml" />
+  </Folder>
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
   <Project Path="Parser.Benchmarks/Parser.Benchmarks.csproj">
     <Build Solution="Debug|*" Project="false" />
   </Project>
@@ -6,6 +17,7 @@
   <Project Path="Parser.SourceGenerators/Parser.SourceGenerators.csproj">
     <Build Solution="Debug|*" Project="false" />
   </Project>
+  <Project Path="Parser.TcpClient/Parser.TcpClient.csproj" />
   <Project Path="Parser.Test/Parser.Test.csproj" />
   <Project Path="Parser/Parser.csproj" />
 </Solution>

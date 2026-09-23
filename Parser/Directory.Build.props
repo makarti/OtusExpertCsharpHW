@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+	Общие настройки для всех net10.0-проектов решения.
+	Не применяется к Parser.SourceGenerators (netstandard2.0).
+	Условие построено на имени проекта, а не на $(TargetFramework), т.к. Directory.Build.props
+	импортируется до того, как csproj устанавливает TargetFramework.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' != 'Parser.SourceGenerators'">
+	<ImplicitUsings>enable</ImplicitUsings>
+	<Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
